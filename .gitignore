@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Capacitor generated
+android/
+ios/
+
+# Build output
+dist/
+www/vendor/
+
+# Environment & secrets
+.env
+.env.*
+google-services.json
+GoogleService-Info.plist
+
+# Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
