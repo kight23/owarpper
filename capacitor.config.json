@@ -1,9 +1,18 @@
 {
-  "appId": "com.yourcompany.odoowrapper",
+  "appId": "com.odoo620.odoowrapper",
   "appName": "Odoo Mobile",
   "webDir": "www",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "cleartext": true,
+    "allowNavigation": ["192.168.4.23:8069"],
+    "proxies": {
+      "/api": {
+        "changeOrigin": true,
+        "target": "http://192.168.4.23:8069",
+        "ws": true
+      }
+    }
   },
   "plugins": {
     "SplashScreen": {
