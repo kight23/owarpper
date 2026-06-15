@@ -10,13 +10,32 @@
  */
 
 const App = {
-  init() {
+  async init() {
     this.bindEvents();
-    this.prefill();
     this.updateOfflineBadge();
 
     window.addEventListener('online',  () => this.updateOfflineBadge());
     window.addEventListener('offline', () => this.updateOfflineBadge());
+
+    // Auto login nếu đã có thông tin
+    await this.tryAutoLogin();
+  },
+
+  async tryAutoLogin() {
+    const serverUrl = localStorage.getItem('pref_server');
+    const database  = localStorage.getItem('pref_db');
+    const username  = localStorage.getItem('pref_user');
+    const password  = localStorage.getItem('pref_pass'); // Lưu password nếu muốn auto login
+
+    if (serverUrl && database && username && password) {
+      console.log('Attempting auto login...');
+      // Điền vào form để user thấy
+      this.prefill();
+      // Thực hiện login
+      await this.handleLogin(true);
+    } else {
+      this.prefill();
+    }
   },
 
   bindEvents() {
@@ -28,14 +47,20 @@ const App = {
       ?.addEventListener('blur', () => this.tryAutoFillDb());
   },
 
-  async handleLogin() {
+  async handleLogin(isAuto = false) {
     const serverUrl = document.getElementById('serverUrl')?.value?.trim();
     const database  = document.getElementById('database')?.value?.trim();
     const username  = document.getElementById('username')?.value?.trim();
-    const password  = document.getElementById('password')?.value;
+    let password  = document.getElementById('password')?.value;
+
+    // Nếu là auto-login mà pass trong input trống (do trình duyệt ko tự fill), lấy từ localStorage
+    if (isAuto && !password) {
+      password = localStorage.getItem('pref_pass');
+    }
 
     if (!serverUrl || !database || !username || !password) {
-      return this.showError('Vui lòng điền đầy đủ thông tin.');
+      if (!isAuto) return this.showError('Vui lòng điền đầy đủ thông tin.');
+      return;
     }
 
     this.setLoading(true);
@@ -47,6 +72,7 @@ const App = {
       localStorage.setItem('pref_server', serverUrl);
       localStorage.setItem('pref_db',     database);
       localStorage.setItem('pref_user',   username);
+      localStorage.setItem('pref_pass',   password); // Lưu để lần sau auto login
 
       // Bước 2: submit form POST trong WebView
       // WebView nhận Set-Cookie trực tiếp từ Odoo → redirect /odoo → logged in
@@ -54,6 +80,8 @@ const App = {
     } else {
       this.showError(result.error || 'Đăng nhập thất bại.');
       this.setLoading(false);
+      // Nếu auto login thất bại thì xóa pass để ko loop
+      if (isAuto) localStorage.removeItem('pref_pass');
     }
   },
 

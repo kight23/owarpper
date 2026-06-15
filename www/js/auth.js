@@ -42,6 +42,24 @@ const OdooAuth = {
     if (data?.result?.uid) {
       localStorage.setItem(this.KEYS.server,   serverUrl);
       localStorage.setItem(this.KEYS.database, database);
+
+      // Lưu session_id vào Cookie của WebView để không phải login lại bằng form
+      if (data.result.session_id && window.Capacitor?.isNativePlatform?.()) {
+        try {
+          const domain = new URL(serverUrl).hostname;
+          await window.Capacitor.Plugins.CapacitorCookies.setCookie({
+            url: serverUrl,
+            key: 'session_id',
+            value: data.result.session_id,
+            expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toUTCString(),
+            path: '/',
+          });
+          console.log('Session cookie set for domain:', domain);
+        } catch (e) {
+          console.error('Failed to set session cookie:', e);
+        }
+      }
+
       return { success: true };
     }
 
@@ -54,21 +72,48 @@ const OdooAuth = {
   },
 
   /**
-   * Bước 2: Tạo session thật trong WebView bằng form POST.
-   *
-   * form.submit() → POST /web/login (trong WebView, không phải native HTTP)
-   * Odoo xử lý → Set-Cookie: session_id=... (cho domain 192.168.x.x)
-   * WebView lưu cookie → Odoo redirect → /odoo → logged in!
-   *
-   * Không bị CORS (form POST không có preflight).
-   * Không bị HttpOnly (cookie được set bởi server response, không phải JS).
+   * Bước 2: Chuyển hướng WebView sang Odoo.
+   * Vì session_id đã được set qua CapacitorCookies ở Bước 1,
+   * WebView sẽ tự động nhận diện user đã logged in.
    */
   async loginViaForm(serverUrl, database, username, password) {
     serverUrl = this._normalizeUrl(serverUrl);
 
-    // Lấy CSRF token (Odoo yêu cầu cho form POST)
-    const csrfToken = await this._fetchCsrfToken(serverUrl);
+    if (window.Capacitor?.isNativePlatform?.()) {
+      try {
+        const Http = window.Capacitor.Plugins.CapacitorHttp;
 
+        // 1. Lấy CSRF token
+        const csrfToken = await this._fetchCsrfToken(serverUrl);
+
+        // 2. Thực hiện POST đăng nhập qua Native để lấy đầy đủ Cookie
+        const body = new URLSearchParams();
+        body.append('db', database);
+        body.append('login', username);
+        body.append('password', password);
+        body.append('redirect', '/odoo');
+        if (csrfToken) body.append('csrf_token', csrfToken);
+
+        await Http.post({
+          url: `${serverUrl}/web/login`,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          data: body.toString(),
+        });
+
+        // 3. Đợi Capacitor đồng bộ Cookie vào WebView
+        await new Promise(r => setTimeout(r, 800));
+
+        // 4. CHUYỂN HƯỚNG TOÀN BỘ APP SANG ODOO (Thay vì dùng Iframe bị chặn)
+        // Dùng location.replace để người dùng không thể "Back" quay lại màn hình login
+        window.location.replace(`${serverUrl}/odoo`);
+        return { success: true };
+      } catch (err) {
+        console.error('Native login sync failed:', err);
+      }
+    }
+
+    // Fallback cho Web
+    const csrfToken = await this._fetchCsrfToken(serverUrl);
     const fields = {
       db:         database,
       login:      username,
@@ -77,7 +122,6 @@ const OdooAuth = {
     };
     if (csrfToken) fields.csrf_token = csrfToken;
 
-    // Tạo form ẩn và submit trong WebView
     const form = document.createElement('form');
     form.method = 'POST';
     form.action = `${serverUrl}/web/login`;
@@ -92,7 +136,7 @@ const OdooAuth = {
     }
 
     document.body.appendChild(form);
-    form.submit(); // WebView navigate → nhận cookie → redirect /odoo
+    form.submit();
   },
 
   /**
@@ -102,9 +146,11 @@ const OdooAuth = {
   async _fetchCsrfToken(serverUrl) {
     try {
       const loginUrl = `${serverUrl}/web/login`;
-
       let html = '';
-      if (window.Capacitor?.isNativePlatform?.()) {
+
+      const isNative = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp;
+
+      if (isNative) {
         const Http = window.Capacitor.Plugins.CapacitorHttp;
         const res  = await Http.get({ url: loginUrl });
         html = typeof res.data === 'string' ? res.data : '';
@@ -157,17 +203,26 @@ const OdooAuth = {
   async _post(url, body) {
     const payload = JSON.stringify(body);
 
-    if (window.Capacitor?.isNativePlatform?.()) {
-      const Http = window.Capacitor.Plugins.CapacitorHttp;
-      const res  = await Http.post({
-        url,
-        headers:      { 'Content-Type': 'application/json' },
-        data:         payload,
-        responseType: 'json',
-      });
-      return this._parseResponse(res.data, url);
+    // Luôn ưu tiên dùng CapacitorHttp trên Mobile để tránh lỗi Mixed Content (HTTPS -> HTTP)
+    const isNative = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp;
+
+    if (isNative) {
+      try {
+        const Http = window.Capacitor.Plugins.CapacitorHttp;
+        const res  = await Http.post({
+          url,
+          headers:      { 'Content-Type': 'application/json' },
+          data:         payload,
+          responseType: 'json',
+        });
+        return this._parseResponse(res.data, url);
+      } catch (e) {
+        console.error('CapacitorHttp POST error:', e);
+        // Nếu lỗi do plugin chưa sẵn sàng, sẽ rơi xuống fetch bên dưới
+      }
     }
 
+    // Chỉ dùng fetch cho môi trường trình duyệt web hoặc khi plugin lỗi
     const res  = await fetch(url, {
       method:      'POST',
       headers:     { 'Content-Type': 'application/json' },
